@@ -14,7 +14,9 @@ acapella caps       # 所有命令 + 参数（机器可读）
 ### Homebrew（推荐）
 
 ```bash
-brew install govo/tap/acapella
+brew tap govo/tap
+brew trust govo/tap        # Homebrew 6 起第三方 tap 必须显式信任，否则 formula 不加载
+brew install acapella
 acapella --version
 ```
 
@@ -25,16 +27,20 @@ acapella --version
 ```bash
 tar -xzf acapella-0.1.1-darwin-arm64.tar.gz     # Intel 用 -x64
 sudo mv acapella /usr/local/bin/
-xattr -d com.apple.quarantine /usr/local/bin/acapella 2>/dev/null || true
 ```
+
+产物带 **Developer ID 签名 + Apple 公证**，Gatekeeper 直接放行，不需要 `xattr -d` 去隔离属性。
+只有在完全离线、且 `stapler` 没能把票据钉进裸 Mach-O 的机器上才会被拦，那时再补：
+`xattr -d com.apple.quarantine /usr/local/bin/acapella`。
 
 ### 本地构建（开发机）
 
 发布产物不进 git，所以 clone 下来没有二进制。自己出一个：
 
 ```bash
-./scripts/release.sh --version 0.1.1     # 生成 ./acapella（arm64，约 600K）
+./scripts/release.sh --version 0.1.1     # 构建+签名+公证+打包，生成 ./acapella（arm64）
 ./acapella --version
+./scripts/release.sh --skip-sign         # 没有证书时：只编译不签名（产物只能自己测）
 ```
 
 ## 前置条件
@@ -76,13 +82,19 @@ tar.gz **解开就是单个 `acapella` 文件**（没有目录层），Homebrew 
 
 ```bash
 cd dist && shasum -a 256 -c checksums.txt
+codesign --verify --strict --verbose=2 ../acapella    # 签名是否完整
+codesign -dv --verbose=4 ../acapella | grep Authority # 应列出 Developer ID Application: ...
+spctl -a -t exec -vv ../acapella                      # accepted 且 source=Notarized Developer ID
 ```
 
 ## 发版流程
 
 ```bash
+# 0. 前置：钥匙串里有 "Developer ID Application" 证书（Apple Development / Apple Distribution
+#    都不能用于公证），且凭据已存：xcrun notarytool store-credentials acapella
+#    （没存过的话脚本会退回复用 drumai 那把凭据 —— 同一个 Apple ID，凭据是账号级的）
 # 1. 改版本号（Acapella/Acapella/CLI/Sources/acapella/CLIRunner.swift 的 `version`）
-# 2. 出产物并同步 formula
+# 2. 出产物（构建 → 签名 → 公证 → 打包 → formula）
 ./scripts/release.sh --version 0.1.1 \
     --formula ../homebrew-tap/Formula/acapella.rb
 

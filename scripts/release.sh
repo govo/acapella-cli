@@ -2,25 +2,43 @@
 #
 # release.sh —— 出 `acapella` 的发布产物（本仓库 = 二进制分发仓库）。
 #
-# 做四件事，任何一步失败就停：
+# 做六件事，任何一步失败就停：
 #   1. 构建 arm64 与 x86_64 两个 release 二进制（不用 universal：体积翻倍）
-#   2. 各自打成单文件 tar.gz（解包后当前目录就是 acapella，Homebrew 直接 bin.install）
-#   3. 写 dist/checksums.txt，并把 arm64 裸二进制放到仓库根
-#   4. 生成 Homebrew formula（--formula 给了就整份覆盖，否则打到 stdout）
+#   2. Developer ID 签名（hardened runtime）—— ad-hoc 签名的包公证一定不过
+#   3. 逐架构提交 Apple 公证（notarytool，每次要等苹果返回）
+#   4. 各自打成单文件 tar.gz（解包后当前目录就是 acapella，Homebrew 直接 bin.install）
+#   5. 写 dist/checksums.txt，并把 arm64 裸二进制放到仓库根
+#   6. 生成 Homebrew formula（--formula 给了就整份覆盖，否则打到 stdout）
 #
 # 用法
 #   ./scripts/release.sh
 #   ./scripts/release.sh --version 0.2.0
 #   ./scripts/release.sh --formula ../homebrew-tap/Formula/acapella.rb
-#   ./scripts/release.sh --no-build          # 复用已有产物（只重新打包）
+#   ./scripts/release.sh --no-build          # 复用已有产物（只重新签名/打包）
+#   ./scripts/release.sh --skip-sign         # 只编译不签名（拿不到证书时自测用）
+#   ./scripts/release.sh --notary-profile X  # 换公证凭据 profile
+#
+# 前置（签名/公证那两步）：
+#   - 钥匙串里有 "Developer ID Application"（Apple Development / Apple Distribution 都不行）
+#   - 公证凭据已存：xcrun notarytool store-credentials <profile>
+#   证书与凭据只在这台机器上，不进 CI、不进仓库。
 #
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 CLI_PKG="${ACAPELLA_CLI_PACKAGE:-$HERE/../Acapella/Acapella/CLI}"
+
+# 两个临时目录都在后面按需创建；统一在这里挂一个清理 trap。
+# 分开挂会互相覆盖（后挂的那个把先挂的顶掉，公证用的 zip 就留在 /tmp 里了）。
+STAGE=""
+NOTARY_STAGE=""
+trap 'rm -rf ${STAGE:+"$STAGE"} ${NOTARY_STAGE:+"$NOTARY_STAGE"}' EXIT
 VERSION="$(tr -d '[:space:]' < "$HERE/VERSION" 2>/dev/null || echo 0.1.0)"
 FORMULA=""
 BUILD=1
+SIGN=1
+IDENTITY="${ACAPELLA_SIGN_IDENTITY:-}"
+NOTARY_PROFILE="${ACAPELLA_NOTARY_PROFILE:-}"
 REPO="${ACAPELLA_REPO:-govo/acapella-cli}"
 
 while [ $# -gt 0 ]; do
@@ -28,8 +46,11 @@ while [ $# -gt 0 ]; do
     --version) VERSION="${2:?}"; shift 2 ;;
     --formula) FORMULA="${2:?}"; shift 2 ;;
     --repo) REPO="${2:?}"; shift 2 ;;
+    --identity) IDENTITY="${2:?}"; shift 2 ;;
+    --notary-profile) NOTARY_PROFILE="${2:?}"; shift 2 ;;
     --no-build) BUILD=0; shift ;;
-    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --skip-sign) SIGN=0; shift ;;
+    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "release.sh: unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -91,20 +112,101 @@ for bin in "$ARM_BIN" "$X64_BIN"; do
   echo "==> $(dirname "$bin") reports $VERSION"
 done
 
+# ── 签名 + 公证 ────────────────────────────────────────────────────────────
+# 为什么要做：brew 与 curl 下载不带 com.apple.quarantine，不签也能跑；但**别人用浏览器
+# 或 AirDrop 拿到 tarball** 时会打上隔离属性，没签名/没公证就是 exec 直接被杀。
+# 签了名 + 过了公证的包，Gatekeeper 直接放行，不用教用户 xattr。
+#
+# 两个坑（照 drumai 的 build-cli.sh 抄的，别自己改）：
+#   1. linker 已经给产物做过 ad-hoc 签名，直接再签会叠两层 → 先 --remove-signature。
+#   2. `-options runtime`（hardened runtime）是公证的硬要求；Apple Development /
+#      Apple Distribution 证书都不能用于公证，只认 Developer ID Application。
+if [ "$SIGN" -eq 1 ]; then
+  if [ -z "$IDENTITY" ]; then
+    IDENTITY="$(security find-identity -v -p codesigning \
+      | sed -n 's/.*"\(Developer ID Application: [^"]*\)"/\1/p' | head -1)"
+  fi
+  if [ -z "$IDENTITY" ]; then
+    echo "release.sh: 钥匙串里没有 Developer ID Application 证书" >&2
+    echo "            （Apple Development / Apple Distribution 不能用于公证）" >&2
+    echo "            Xcode → Settings → Accounts → Manage Certificates 里加一张，" >&2
+    echo "            或者加 --skip-sign 只编译不签名（产物只能自己测）" >&2
+    exit 5
+  fi
+  # 凭据 profile：优先显式/环境变量指定的，否则 acapella；两个都没有时退回 drumai
+  # （同一个 Apple ID 团队 9RRNVTE2RE，凭据是账号级的，不是按 app 分的）。
+  if [ -z "$NOTARY_PROFILE" ]; then
+    if xcrun notarytool history --keychain-profile acapella >/dev/null 2>&1; then
+      NOTARY_PROFILE=acapella
+    elif xcrun notarytool history --keychain-profile drumai >/dev/null 2>&1; then
+      NOTARY_PROFILE=drumai
+      echo "==> note: 复用 drumai 的公证凭据（keychain profile: drumai）"
+    else
+      NOTARY_PROFILE=acapella
+    fi
+  fi
+  if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+    echo "release.sh: 公证凭据 profile '$NOTARY_PROFILE' 不存在" >&2
+    echo "            先跑：xcrun notarytool store-credentials $NOTARY_PROFILE" >&2
+    echo "            或者加 --skip-sign 只编译不签名" >&2
+    exit 5
+  fi
+
+  echo "==> signing as: $IDENTITY"
+  for bin in "$ARM_BIN" "$X64_BIN"; do
+    /usr/bin/codesign --remove-signature "$bin" 2>/dev/null || true
+    /usr/bin/codesign --force --options runtime --timestamp --sign "$IDENTITY" "$bin" \
+      || { echo "release.sh: codesign failed on $bin" >&2; exit 5; }
+    /usr/bin/codesign --verify --strict "$bin" \
+      || { echo "release.sh: codesign verify failed on $bin" >&2; exit 5; }
+    echo "==> signed $(basename "$(dirname "$bin")")"
+  done
+
+  # notarytool 只吃 .zip/.pkg/.dmg，裸 Mach-O 先 ditto 成 zip（--keepParent 保住里面的文件名）。
+  echo "==> notarizing (each submission waits for Apple)"
+  NOTARY_STAGE="$(mktemp -d)"
+
+  # 骨架名按架构写死，不要从 $bin 的目录名推 —— 两个架构的产物都叫 .../release/acapella，
+  # 推出来的 tag 全是 "release"，zip 同名、日志也分不清是哪个架构。
+  for entry in "arm64:$ARM_BIN" "x64:$X64_BIN"; do
+    arch_tag="${entry%%:*}"
+    bin="${entry#*:}"
+    zip="$NOTARY_STAGE/acapella-$VERSION-darwin-$arch_tag.zip"
+    /usr/bin/ditto -c -k --keepParent "$bin" "$zip"
+    echo "    $arch_tag uploading…"
+    xcrun notarytool submit "$zip" --keychain-profile "$NOTARY_PROFILE" --wait \
+      || { echo "release.sh: notarization failed for $arch_tag" >&2
+           echo "            看日志：xcrun notarytool log <id> --keychain-profile $NOTARY_PROFILE" >&2
+           exit 6; }
+    # staple 把票据钉进二进制（离线也能过）。裸 Mach-O 常常不支持，失败只警告 ——
+    # 联网校验照样放行，只影响「完全离线 + 带 quarantine」的首次运行。
+    if xcrun stapler staple "$bin" >/dev/null 2>&1; then
+      echo "    $arch_tag stapled"
+    else
+      echo "    $arch_tag staple skipped (裸可执行文件常见；联网校验不受影响)"
+    fi
+  done
+else
+  echo "==> WARNING: 跳过签名与公证（--skip-sign）——这份产物只能自己测，不能发布" >&2
+fi
+
 echo "==> packaging $VERSION"
 STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/arm64" "$STAGE/x64"
 cp "$ARM_BIN" "$STAGE/arm64/acapella"
 cp "$X64_BIN" "$STAGE/x64/acapella"
 
-# 可复现打包：把 mtime 归一化 + gzip -n（不写文件名/时间戳）。
-# 同样输入每次打出同样的字节，checksums 与 formula 才不会因为重跑而"无故变化"。
+# 可复现打包：把 mtime 归一化 + gzip -n（不写文件名/时间戳），
+# 让**打包这一步**不引入随机性。
 #
 # 注意：**不要依赖 `tar --mtime`**。它在部分 tar（沙箱、旧 bsdtar）上不生效也不报错，
 # 于是打包静默退回带时间戳的路径 —— 结果是"重新打包 → 哈希变了 → 指纹与已上传的
 # release 资产不一致 → brew install 报 sha256 mismatch"。用 `touch -t` 改文件时间
 # 再普通打包，所有 tar 都支持，没有静默失效的分支。
+#
+# 另：**签名带 Apple 时间戳（--timestamp），所以二进制本身逐次构建不同** ——
+# 重新构建的包哈希必然变，只有「同一份二进制重新打包」才字节相同。别拿"重跑应得同一 sha"
+# 去做断言；要稳定就复用已有产物 + `--no-build`。
 NORMALIZED_MTIME=202001010000
 pack() {
   local dir="$1" out="$2"
