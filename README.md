@@ -99,6 +99,25 @@ git -C ../homebrew-tap push
 `release.sh` 生成整份 formula（与 `drumai.rb` 的风格一致），**不要手工改 url/sha256**：
 下次发版会整份覆盖。
 
+## 测试（冒烟）
+
+`scripts/smoke.sh` 对着**正在运行的** App 走一遍完整链路：
+读 → 建空工程 → 加 MIDI 轨 → 写 4 个音符 → 回读 → 渲染 → seek/play/pause → 循环 → 导出 → 质检 → 删掉测试工程。
+
+```bash
+./scripts/smoke.sh            # 21 项，全过退出 0
+./scripts/smoke.sh --errors   # 再加 3 项退出码契约（错 token / 过期 ifRevision / 不存在的工程）
+./scripts/smoke.sh --keep     # 保留测试工程，进 App 里看结果
+./scripts/smoke.sh --verbose  # 每一步都打印收到的 JSON
+```
+
+前置：`acapella doctor` 能过（脚本第一步就会跑它，连不上直接退出码 3）。
+依赖 `jq`。
+
+**为什么需要它**：52 条命令的语法、参数、时序错误都不会在编译期暴露 —— 只有真跑才知道
+`project create` 之后有没有等到工程加载、`track render` 之后引擎有没有重建、
+`qc mix` 的返回形状有没有变。改动 App 侧 handler 之后跑一次，比手工点十遍快。
+
 ## 退出码（写脚本时看这个）
 
 | 码 | 含义 |
