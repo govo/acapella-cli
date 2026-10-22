@@ -32,7 +32,7 @@ CLI_PKG="${ACAPELLA_CLI_PACKAGE:-$HERE/../Acapella/Acapella/CLI}"
 # 分开挂会互相覆盖（后挂的那个把先挂的顶掉，公证用的 zip 就留在 /tmp 里了）。
 STAGE=""
 NOTARY_STAGE=""
-trap 'rm -rf ${STAGE:+"$STAGE"} ${NOTARY_STAGE:+"$NOTARY_STAGE"}' EXIT
+trap 'for d in ${STAGE:+"$STAGE"} ${NOTARY_STAGE:+"$NOTARY_STAGE"}; do rm -rf "$d"; done' EXIT
 VERSION="$(tr -d '[:space:]' < "$HERE/VERSION" 2>/dev/null || echo 0.1.0)"
 FORMULA=""
 BUILD=1
