@@ -37,11 +37,27 @@ done
 DIST="$HERE/dist"
 mkdir -p "$DIST"
 
+# 版本号只有一个真值（本仓库的 VERSION / --version），但二进制里的版本是编译进
+# `CLIRunner.version` 的常量 —— 只改文件不改常量，产物会自报旧版本，而
+# `brew test`（assert_match version.to_s）正好拿它比对，装完就红。
+# 所以出包前把常量改写成本次版本，出包后再断言一遍二进制自报的版本。
+CLI_VERSION_SWIFT="$CLI_PKG/Sources/acapella/CLIRunner.swift"
+sync_cli_version_constant() {
+  [ -f "$CLI_VERSION_SWIFT" ] || return 0
+  /usr/bin/sed -i '' -E "s/(static let version = \")[^\"]*(\")/\1${VERSION}\2/" "$CLI_VERSION_SWIFT"
+  if ! grep -q "static let version = \"${VERSION}\"" "$CLI_VERSION_SWIFT"; then
+    echo "release.sh: could not set CLIRunner.version to $VERSION in $CLI_VERSION_SWIFT" >&2
+    exit 4
+  fi
+  echo "==> CLIRunner.version = $VERSION"
+}
+
 if [ "$BUILD" -eq 1 ]; then
   if [ ! -d "$CLI_PKG" ]; then
     echo "release.sh: CLI package not found at $CLI_PKG (set ACAPELLA_CLI_PACKAGE)" >&2
     exit 3
   fi
+  sync_cli_version_constant
   echo "==> building arm64"
   ( cd "$CLI_PKG" && swift build -c release --disable-sandbox --scratch-path /tmp/acapella-release-arm64 )
   echo "==> building x86_64"
@@ -55,6 +71,24 @@ fi
 
 for bin in "$ARM_BIN" "$X64_BIN"; do
   [ -x "$bin" ] || { echo "release.sh: missing $bin" >&2; exit 3; }
+done
+
+# 断言：二进制自己说的版本 = 这次要发的版本。`--no-build` 复用旧产物时这一条同样有效
+# （复用上一版二进制再打成本版的包，是这里最容易悄悄发生的事）。
+# x86_64 那半要靠 Rosetta 才跑得起来；跑不动就跳过 —— 两个架构编的是同一份源码常量，
+# arm64 对上了就已经说明常量被改对了。
+for bin in "$ARM_BIN" "$X64_BIN"; do
+  reported="$("$bin" --version 2>/dev/null | awk '{print $2}')"
+  if [ -z "$reported" ]; then
+    echo "==> note: $(dirname "$bin") binary did not run here; version assert skipped"
+    continue
+  fi
+  if [ "$reported" != "$VERSION" ]; then
+    echo "release.sh: $bin reports '$reported' but this release is $VERSION" >&2
+    echo "            (bump CLIRunner.version, or rebuild without --no-build)" >&2
+    exit 4
+  fi
+  echo "==> $(dirname "$bin") reports $VERSION"
 done
 
 echo "==> packaging $VERSION"
@@ -89,7 +123,15 @@ cp "$STAGE/arm64/acapella" "$HERE/acapella"
 chmod +x "$HERE/acapella"
 printf '%s\n' "$VERSION" > "$HERE/VERSION"
 
-( cd "$DIST" && shasum -a 256 *.tar.gz > checksums.txt )
+# checksums 只登记**本版**的两个包。
+#
+# 以前这里是 `shasum *.tar.gz`，dist/ 里留着上一版的包时会把旧哈希一起写进来 ——
+# 于是 `gh release create v$(cat VERSION) dist/*.tar.gz` 会把旧版本的 tarball
+# 也传进新 release（体积翻倍、资产名与本版对不上），checksums.txt 里也会多出
+# 两条指向"这次没上传的文件"的记录。
+( cd "$DIST" && shasum -a 256 \
+    "acapella-$VERSION-darwin-arm64.tar.gz" \
+    "acapella-$VERSION-darwin-x64.tar.gz" > checksums.txt )
 
 ARM_SHA="$(awk '/arm64/{print $1}' "$DIST/checksums.txt")"
 X64_SHA="$(awk '/x64/{print $1}' "$DIST/checksums.txt")"
@@ -147,5 +189,8 @@ fi
 echo
 echo "next:"
 echo "  git tag v$VERSION && git push origin v$VERSION"
-echo "  gh release create v$VERSION dist/*.tar.gz --title v$VERSION"
+echo "  gh release create v$VERSION \\"
+echo "    dist/acapella-$VERSION-darwin-arm64.tar.gz \\"
+echo "    dist/acapella-$VERSION-darwin-x64.tar.gz \\"
+echo "    dist/checksums.txt --title v$VERSION"
 echo "  (tap) git -C <homebrew-tap> commit Formula/acapella.rb"
