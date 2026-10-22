@@ -1,0 +1,23 @@
+# 发布产物不进 git
+# 二进制与 tarball 一律传 GitHub Releases；Formula/acapella.rb 的 url 就指向那里。
+# 仓库里只留「怎么生成它们」的脚本，不留生成结果。
+/acapella
+/dist/
+
+# release.sh 的兜底：正常都落在 /tmp，万一在这儿生成也别提交
+/build/
+*.tar.gz
+*.zip
+*.dSYM/
+
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*~
