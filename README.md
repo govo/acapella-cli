@@ -23,7 +23,7 @@ acapella --version
 从 [Releases](https://github.com/govo/acapella-cli/releases) 取对应架构的 tar.gz：
 
 ```bash
-tar -xzf acapella-0.1.0-darwin-arm64.tar.gz     # Intel 用 -x64
+tar -xzf acapella-0.1.1-darwin-arm64.tar.gz     # Intel 用 -x64
 sudo mv acapella /usr/local/bin/
 xattr -d com.apple.quarantine /usr/local/bin/acapella 2>/dev/null || true
 ```
@@ -33,7 +33,7 @@ xattr -d com.apple.quarantine /usr/local/bin/acapella 2>/dev/null || true
 发布产物不进 git，所以 clone 下来没有二进制。自己出一个：
 
 ```bash
-./scripts/release.sh --version 0.1.0     # 生成 ./acapella（arm64，约 600K）
+./scripts/release.sh --version 0.1.1     # 生成 ./acapella（arm64，约 600K）
 ./acapella --version
 ```
 
@@ -60,8 +60,8 @@ README.md
 ```
 acapella                          # 裸二进制（arm64），方便直接拷
 dist/
-  acapella-0.1.0-darwin-arm64.tar.gz
-  acapella-0.1.0-darwin-x64.tar.gz
+  acapella-0.1.1-darwin-arm64.tar.gz
+  acapella-0.1.1-darwin-x64.tar.gz
   checksums.txt                   # 上面两个包一起校验
 ```
 
@@ -83,16 +83,16 @@ cd dist && shasum -a 256 -c checksums.txt
 ```bash
 # 1. 改版本号（Acapella/Acapella/CLI/Sources/acapella/CLIRunner.swift 的 `version`）
 # 2. 出产物并同步 formula
-./scripts/release.sh --version 0.1.0 \
+./scripts/release.sh --version 0.1.1 \
     --formula ../homebrew-tap/Formula/acapella.rb
 
 # 3. 传到 GitHub Release（tag = v<版本>）
-git tag v0.1.0 && git push origin v0.1.0
-gh release create v0.1.0 dist/*.tar.gz --title v0.1.0
+git tag v0.1.1 && git push origin v0.1.1
+gh release create v0.1.1 dist/*.tar.gz --title v0.1.1
 
 # 4. 提交 tap
 git -C ../homebrew-tap add Formula/acapella.rb
-git -C ../homebrew-tap commit -m "acapella 0.1.0"
+git -C ../homebrew-tap commit -m "acapella 0.1.1"
 git -C ../homebrew-tap push
 ```
 
@@ -105,7 +105,7 @@ git -C ../homebrew-tap push
 读 → 建空工程 → 加 MIDI 轨 → 写 4 个音符 → 回读 → 渲染 → seek/play/pause → 循环 → 导出 → 质检 → 删掉测试工程。
 
 ```bash
-./scripts/smoke.sh            # 21 项，全过退出 0
+./scripts/smoke.sh            # 全过退出 0
 ./scripts/smoke.sh --errors   # 再加 3 项退出码契约（错 token / 过期 ifRevision / 不存在的工程）
 ./scripts/smoke.sh --keep     # 保留测试工程，进 App 里看结果
 ./scripts/smoke.sh --verbose  # 每一步都打印收到的 JSON
@@ -114,7 +114,7 @@ git -C ../homebrew-tap push
 前置：`acapella doctor` 能过（脚本第一步就会跑它，连不上直接退出码 3）。
 依赖 `jq`。
 
-**为什么需要它**：52 条命令的语法、参数、时序错误都不会在编译期暴露 —— 只有真跑才知道
+**为什么需要它**：60 条命令的语法、参数、时序错误都不会在编译期暴露 —— 只有真跑才知道
 `project create` 之后有没有等到工程加载、`track render` 之后引擎有没有重建、
 `qc mix` 的返回形状有没有变。改动 App 侧 handler 之后跑一次，比手工点十遍快。
 
@@ -136,7 +136,8 @@ git -C ../homebrew-tap push
 
 ## 本版本没做的（别在文档里承诺）
 
-- `project import` / `midi import` / `take import`：需要 App 侧上传端点，当前返回 `UNSUPPORTED`。
+- `project import` / `midi import`：没有这两个命令；换工程用 `project open`，音频进工程走
+  `upload`（推字节，沙盒 App 读不到 CLI 的路径）→ `take import --file <id> --track … --at …`。
 - `harmony …` / `fx …` / `chords …` / `key analyze`：没有这些命令；编和声用 `track add --kind midi`
   + `notes replace`。
 - 网格 MV 导出、SSE watch、批量事务：P1。
