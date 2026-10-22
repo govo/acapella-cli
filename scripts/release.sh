@@ -64,27 +64,22 @@ mkdir -p "$STAGE/arm64" "$STAGE/x64"
 cp "$ARM_BIN" "$STAGE/arm64/acapella"
 cp "$X64_BIN" "$STAGE/x64/acapella"
 
-# 可复现打包：mtime 固定 + gzip -n（不写文件名/时间戳）。
-# 同样的二进制每次打出同样的哈希，checksums 与 formula 才不会因为重跑而"无故变化"。
-# 但 `tar --mtime` 不是所有 tar 都有（沙箱/旧 bsdtar 不支持）→ 先探测，不支持就退回普通 tar。
-REPRO=0
-if ( cd "$STAGE/arm64" && tar --mtime='UTC 2020-01-01' -cf /dev/null acapella ) 2>/dev/null; then
-  REPRO=1
-else
-  echo "note: this tar has no --mtime; packages will not be byte-reproducible" >&2
-fi
-
+# 可复现打包：把 mtime 归一化 + gzip -n（不写文件名/时间戳）。
+# 同样输入每次打出同样的字节，checksums 与 formula 才不会因为重跑而"无故变化"。
+#
+# 注意：**不要依赖 `tar --mtime`**。它在部分 tar（沙箱、旧 bsdtar）上不生效也不报错，
+# 于是打包静默退回带时间戳的路径 —— 结果是"重新打包 → 哈希变了 → 指纹与已上传的
+# release 资产不一致 → brew install 报 sha256 mismatch"。用 `touch -t` 改文件时间
+# 再普通打包，所有 tar 都支持，没有静默失效的分支。
+NORMALIZED_MTIME=202001010000
 pack() {
   local dir="$1" out="$2"
   (
     set -o pipefail
     cd "$dir" || exit 1
-    if [ "$REPRO" = "1" ]; then
-      tar --mtime='UTC 2020-01-01' -cf - acapella | gzip -9n
-    else
-      tar -cf - acapella | gzip -9n
-    fi > "$out"
-  ) || { echo "release.sh: failed to package $dir" >&2; rm -f "$out"; exit 1; }
+    touch -t "$NORMALIZED_MTIME" acapella
+    tar -cf - acapella | gzip -9n
+  ) > "$out" || { echo "release.sh: failed to package $dir" >&2; rm -f "$out"; exit 1; }
   [ -s "$out" ] || { echo "release.sh: $out is empty" >&2; exit 1; }
 }
 pack "$STAGE/arm64" "$DIST/acapella-$VERSION-darwin-arm64.tar.gz"
@@ -110,9 +105,13 @@ FORMULA_TEXT="$(cat <<RUBY
 #  与 drumai 一致：一个 formula 覆盖两个架构，brew 按本机 CPU 选块；
 #  二进制挂在 $REPO 的 Release 上，tag 就是 v<版本>。
 #
+#  已知审计噪音（drumai 同样有）：brew audit 会说 on_arm/on_intel 里不能放 url/sha256。
+#  但块内语句照常求值，fetch/install 都正常；个人 tap 不跑 audit，所以保持这个写法
+#  —— 换成 universal binary 才能消掉，代价是体积翻倍，不值得。
+#
 
 class Acapella < Formula
-  desc "Command line client for the Acapella app on macOS"
+  desc "Command-line client for the Acapella app on macOS"
   homepage "https://github.com/$REPO"
   version "$VERSION"
 
