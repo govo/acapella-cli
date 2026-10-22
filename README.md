@@ -122,5 +122,5 @@ git -C ../homebrew-tap push
   + `notes replace`。
 - 网格 MV 导出、SSE watch、批量事务：P1。
 
-AI 使用手册在 [`govo/acapella-skill`](https://github.com/govo/acapella-skill)（skill 名
+AI 使用手册在 [`govo/acapella_skill`](https://github.com/govo/acapella_skill)（skill 名
 `acapella-arranger`）。
