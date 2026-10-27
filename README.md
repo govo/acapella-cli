@@ -49,6 +49,9 @@ sudo mv acapella /usr/local/bin/
 2. App → 设置 → **「AI 控制」** → 打开开关（默认关闭）。
 3. 打开后 App 会写 token 到容器内 `Application Support/AgentControl/token`，
    CLI 与 App 读同一个文件；关掉开关会轮换 token。
+4. 默认端口 47610 被占时，App 自动顺延 47611–47620，CLI 连不上默认端口会
+   自动扫这段找 `/health`（`acapella doctor` 标注 auto-discovered）；
+   显式 `--port` / `ACAPELLA_AGENT_PORT` 时不扫描。
 
 CLI 不会自己启动 App，也不会改你的配置。连不上时先 `acapella doctor`。
 
