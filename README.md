@@ -25,7 +25,7 @@ acapella --version
 从 [Releases](https://github.com/govo/acapella-cli/releases) 取对应架构的 tar.gz：
 
 ```bash
-tar -xzf acapella-0.1.1-darwin-arm64.tar.gz     # Intel 用 -x64
+tar -xzf acapella-0.4.0-darwin-arm64.tar.gz     # Intel 用 -x64
 sudo mv acapella /usr/local/bin/
 ```
 
@@ -38,7 +38,7 @@ sudo mv acapella /usr/local/bin/
 发布产物不进 git，所以 clone 下来没有二进制。自己出一个：
 
 ```bash
-./scripts/release.sh --version 0.1.1     # 构建+签名+公证+打包，生成 ./acapella（arm64）
+./scripts/release.sh --version 0.4.0     # 构建+签名+公证+打包，生成 ./acapella（arm64）
 ./acapella --version
 ./scripts/release.sh --skip-sign         # 没有证书时：只编译不签名（产物只能自己测）
 ```
@@ -55,6 +55,29 @@ sudo mv acapella /usr/local/bin/
 
 CLI 不会自己启动 App，也不会改你的配置。连不上时先 `acapella doctor`。
 
+## 改一条轨的音频（0.4.0 起）
+
+音频**进出 App 都只能走字节通道**：CLI 与 App 不在同一沙盒，直接读 App 容器里的
+`~/Library/Containers/online.c1c1.acapella/…` 会拿到 `Operation not permitted`。
+
+```bash
+acapella track audio export drums --out ./drums.m4a      # 取出来（App 复制到中转区，CLI 走 GET /download 下发）
+ffmpeg -i ./drums.m4a -af 'highpass=f=40' ./drums-2.m4a
+FID=$(acapella upload ./drums-2.m4a | jq -r .fileId)
+acapella track audio replace drums --file "$FID" --confirm   # 换掉这一轨的声音
+acapella track audio restore drums                            # 反悔（分轨专用）
+```
+
+口径：
+
+- 替换写**新文件** `<recordID>_<stem>_agent.m4a`（AAC 320 kbps），**绝不覆盖**分离产物 ——
+  所以 `restore` 只是改记录里的文件名，不用重跑分离。
+- 一律 44.1 kHz 立体声、**第 0 帧 = 歌曲 0 秒**；外来素材自动重采样，`--at` 之前补静音，超长截断。
+  `--fit reject` 时长度差 > 0.25 s 直接 `BAD_REQUEST`，容差内的缺口给 warning（"末尾 X 秒是静音"）。
+- **录音 take 换掉不可撤销**（同 App 里重录一遍），`restore` 对它报 `UNSUPPORTED`。
+- 真声合唱轨、纯 MIDI 轨拒绝替换（前者换源轨再生成，后者走 `notes replace` + `track render`）。
+- 换完派生残差轨与真声合唱**不跟随**，`warnings` 会点名。
+
 ## 仓库里有什么
 
 ```
@@ -69,8 +92,8 @@ README.md
 ```
 acapella                          # 裸二进制（arm64），方便直接拷
 dist/
-  acapella-0.1.1-darwin-arm64.tar.gz
-  acapella-0.1.1-darwin-x64.tar.gz
+  acapella-0.4.0-darwin-arm64.tar.gz
+  acapella-0.4.0-darwin-x64.tar.gz
   checksums.txt                   # 上面两个包一起校验
 ```
 
@@ -87,7 +110,9 @@ tar.gz **解开就是单个 `acapella` 文件**（没有目录层），Homebrew 
 cd dist && shasum -a 256 -c checksums.txt
 codesign --verify --strict --verbose=2 ../acapella    # 签名是否完整
 codesign -dv --verbose=4 ../acapella | grep Authority # 应列出 Developer ID Application: ...
-spctl -a -t exec -vv ../acapella                      # accepted 且 source=Notarized Developer ID
+# 裸可执行文件要用 open 类型判；`-t exec` 会回 "does not seem to be an app"（旧包同样如此，不是回归）
+spctl -a -t open --context context:primary-signature -vv ../acapella
+# 期望：accepted / source=Notarized Developer ID
 ```
 
 ## 发版流程
@@ -98,16 +123,16 @@ spctl -a -t exec -vv ../acapella                      # accepted 且 source=Nota
 #    （没存过的话脚本会退回复用 drumai 那把凭据 —— 同一个 Apple ID，凭据是账号级的）
 # 1. 改版本号（Acapella/Acapella/CLI/Sources/acapella/CLIRunner.swift 的 `version`）
 # 2. 出产物（构建 → 签名 → 公证 → 打包 → formula）
-./scripts/release.sh --version 0.1.1 \
+./scripts/release.sh --version 0.4.0 \
     --formula ../homebrew-tap/Formula/acapella.rb
 
 # 3. 传到 GitHub Release（tag = v<版本>）
-git tag v0.1.1 && git push origin v0.1.1
-gh release create v0.1.1 dist/*.tar.gz --title v0.1.1
+git tag v0.4.0 && git push origin v0.4.0
+gh release create v0.4.0 dist/*.tar.gz --title v0.4.0
 
 # 4. 提交 tap
 git -C ../homebrew-tap add Formula/acapella.rb
-git -C ../homebrew-tap commit -m "acapella 0.1.1"
+git -C ../homebrew-tap commit -m "acapella 0.4.0"
 git -C ../homebrew-tap push
 ```
 
@@ -129,7 +154,7 @@ git -C ../homebrew-tap push
 前置：`acapella doctor` 能过（脚本第一步就会跑它，连不上直接退出码 3）。
 依赖 `jq`。
 
-**为什么需要它**：60 条命令的语法、参数、时序错误都不会在编译期暴露 —— 只有真跑才知道
+**为什么需要它**：60+ 条命令的语法、参数、时序错误都不会在编译期暴露 —— 只有真跑才知道
 `project create` 之后有没有等到工程加载、`track render` 之后引擎有没有重建、
 `qc mix` 的返回形状有没有变。改动 App 侧 handler 之后跑一次，比手工点十遍快。
 
