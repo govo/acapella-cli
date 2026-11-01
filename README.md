@@ -25,7 +25,7 @@ acapella --version
 从 [Releases](https://github.com/govo/acapella-cli/releases) 取对应架构的 tar.gz：
 
 ```bash
-tar -xzf acapella-0.4.0-darwin-arm64.tar.gz     # Intel 用 -x64
+tar -xzf acapella-0.5.0-darwin-arm64.tar.gz     # Intel 用 -x64
 sudo mv acapella /usr/local/bin/
 ```
 
@@ -38,7 +38,7 @@ sudo mv acapella /usr/local/bin/
 发布产物不进 git，所以 clone 下来没有二进制。自己出一个：
 
 ```bash
-./scripts/release.sh --version 0.4.0     # 构建+签名+公证+打包，生成 ./acapella（arm64）
+./scripts/release.sh --version 0.5.0     # 构建+签名+公证+打包，生成 ./acapella（arm64）
 ./acapella --version
 ./scripts/release.sh --skip-sign         # 没有证书时：只编译不签名（产物只能自己测）
 ```
@@ -78,6 +78,27 @@ acapella track audio restore drums                            # 反悔（分轨�
 - 真声合唱轨、纯 MIDI 轨拒绝替换（前者换源轨再生成，后者走 `notes replace` + `track render`）。
 - 换完派生残差轨与真声合唱**不跟随**，`warnings` 会点名。
 
+## 换一条 MIDI 轨的音色（0.5.0 起）
+
+钢琴卷帘的 22 个音色分两类：非人声 7 个、人声元音 8 × 男女 = 16 个。
+
+```bash
+acapella instrument list                       # id / 名称 / 是不是人声 / 当前档位能不能选
+acapella track instrument bass synth.piano     # 换音色（会重渲染这条轨，音符不动）
+acapella track instrument lead ah --voice male # 元音短名 + 性别（默认女声）
+```
+
+口径：
+
+- **免费档**：全部非人声音色 + 人声里的「啊」（`synth.choirAh` / `synth.choirAhMale`）。
+  其余 7 个元音返回 `LIMIT_REACHED`（`feature: vocal_vowel_pro`）。
+- **已经选过的不退回**：轨道上存着的 Pro 元音照旧渲染、照旧能写音符，
+  `track list` 会标 `instrumentLocked: true` —— 那只是"不能重新选"，不是出错。
+  同一个音色再设一次不算换（放行），只有"换成另一个锁定元音"才会被拦。
+- 真声合唱轨（`role = vocalHarmony`）拒绝改音色：它是音频，去换源轨再 `harmony create`。
+
+---
+
 ## 仓库里有什么
 
 ```
@@ -92,8 +113,8 @@ README.md
 ```
 acapella                          # 裸二进制（arm64），方便直接拷
 dist/
-  acapella-0.4.0-darwin-arm64.tar.gz
-  acapella-0.4.0-darwin-x64.tar.gz
+  acapella-0.5.0-darwin-arm64.tar.gz
+  acapella-0.5.0-darwin-x64.tar.gz
   checksums.txt                   # 上面两个包一起校验
 ```
 
@@ -123,16 +144,16 @@ spctl -a -t open --context context:primary-signature -vv ../acapella
 #    （没存过的话脚本会退回复用 drumai 那把凭据 —— 同一个 Apple ID，凭据是账号级的）
 # 1. 改版本号（Acapella/Acapella/CLI/Sources/acapella/CLIRunner.swift 的 `version`）
 # 2. 出产物（构建 → 签名 → 公证 → 打包 → formula）
-./scripts/release.sh --version 0.4.0 \
+./scripts/release.sh --version 0.5.0 \
     --formula ../homebrew-tap/Formula/acapella.rb
 
 # 3. 传到 GitHub Release（tag = v<版本>）
-git tag v0.4.0 && git push origin v0.4.0
-gh release create v0.4.0 dist/*.tar.gz --title v0.4.0
+git tag v0.5.0 && git push origin v0.5.0
+gh release create v0.5.0 dist/*.tar.gz --title v0.5.0
 
 # 4. 提交 tap
 git -C ../homebrew-tap add Formula/acapella.rb
-git -C ../homebrew-tap commit -m "acapella 0.4.0"
+git -C ../homebrew-tap commit -m "acapella 0.5.0"
 git -C ../homebrew-tap push
 ```
 
