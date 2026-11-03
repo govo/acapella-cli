@@ -75,27 +75,12 @@ acapella track audio restore drums                            # 反悔（分轨�
 - 一律 44.1 kHz 立体声、**第 0 帧 = 歌曲 0 秒**；外来素材自动重采样，`--at` 之前补静音，超长截断。
   `--fit reject` 时长度差 > 0.25 s 直接 `BAD_REQUEST`，容差内的缺口给 warning（"末尾 X 秒是静音"）。
 - **录音 take 换掉不可撤销**（同 App 里重录一遍），`restore` 对它报 `UNSUPPORTED`。
-- 真声合唱轨、纯 MIDI 轨拒绝替换（前者换源轨再生成，后者走 `notes replace` + `track render`）。
-- 换完派生残差轨与真声合唱**不跟随**，`warnings` 会点名。
+- 纯 MIDI 轨拒绝替换（走 `notes replace` + `track render`）。
+- 换完派生残差轨**不跟随**，`warnings` 会点名。
 
-## 换一条 MIDI 轨的音色（0.5.0 起）
+## 钢琴卷帘音色
 
-钢琴卷帘的 22 个音色分两类：非人声 7 个、人声元音 8 × 男女 = 16 个。
-
-```bash
-acapella instrument list                       # id / 名称 / 是不是人声 / 当前档位能不能选
-acapella track instrument bass synth.piano     # 换音色（会重渲染这条轨，音符不动）
-acapella track instrument lead ah --voice male # 元音短名 + 性别（默认女声）
-```
-
-口径：
-
-- **免费档**：全部非人声音色 + 人声里的「啊」（`synth.choirAh` / `synth.choirAhMale`）。
-  其余 7 个元音返回 `LIMIT_REACHED`（`feature: vocal_vowel_pro`）。
-- **已经选过的不退回**：轨道上存着的 Pro 元音照旧渲染、照旧能写音符，
-  `track list` 会标 `instrumentLocked: true` —— 那只是"不能重新选"，不是出错。
-  同一个音色再设一次不算换（放行），只有"换成另一个锁定元音"才会被拦。
-- 真声合唱轨（`role = vocalHarmony`）拒绝改音色：它是音频，去换源轨再 `harmony create`。
+钢琴卷帘目前只提供乐器音色，暂不支持人声音色。CLI 不提供音色清单或修改音色命令。
 
 ---
 
